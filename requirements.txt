@@ -1,0 +1,6 @@
+ipykernel
+tensorflow
+pillow
+tqdm
+opencv-python
+matplotlib
