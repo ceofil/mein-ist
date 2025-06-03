@@ -2,7 +2,7 @@ import numpy as np
 from PIL import Image as im
 from matplotlib import pyplot as plt
 import cv2
-from scipy.optimize import linear_sum_assignment
+from sklearn.neighbors import NearestNeighbors
 from tqdm import tqdm
 
 def concat_2d(blocks, h, w):
@@ -20,7 +20,7 @@ def save_img_array(arr, filename):
     print(f'saved {filename} with shape {arr.shape}')
     im.fromarray(arr).save(filename)
 
-def test(digits, input_file, output_file, scale):
+def test(digits, input_file, output_file, scale, k=10):
     image = cv2.imread(input_file)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
@@ -44,21 +44,36 @@ def test(digits, input_file, output_file, scale):
     digits_flat = digits.reshape(digits.shape[0], -1).astype(np.float32)
     blocks_flat = blocks.reshape(num_blocks, -1).astype(np.float32)
 
-    # Efficient squared distance calculation
-    # cost_matrix[i, j] = ||block_i - digit_j||^2
-    # = ||block_i||^2 + ||digit_j||^2 - 2 * block_i.dot(digit_j)
-    block_norms = np.sum(blocks_flat ** 2, axis=1)  # (num_blocks,)
-    digit_norms = np.sum(digits_flat ** 2, axis=1)  # (num_digits,)
-    dot_products = np.dot(blocks_flat, digits_flat.T)  # (num_blocks, num_digits)
-    cost_matrix = (
-        block_norms[:, None] + digit_norms[None, :] - 2 * dot_products
-    ).astype(np.float32)
+    nn = NearestNeighbors(n_neighbors=k, algorithm='auto').fit(digits_flat)
+    distances, indices = nn.kneighbors(blocks_flat)  # indices: (num_blocks, k)
 
-    row_ind, col_ind = linear_sum_assignment(cost_matrix)
+    block_indices = np.arange(num_blocks)
+    np.random.shuffle(block_indices)
 
-    matching_digits = digits[col_ind]
+    used = np.zeros(digits.shape[0], dtype=bool)
+    matching_digits_idx = np.zeros(num_blocks, dtype=int)
+    fallback_count = 0
 
-    print("Assembling output image...")
+    for i in tqdm(block_indices, desc="Assigning blocks (shuffled)"):
+        for j in range(k):
+            idx = indices[i, j]
+            if not used[idx]:
+                matching_digits_idx[i] = idx
+                used[idx] = True
+                break
+        else:
+            fallback_count += 1
+            available = np.where(~used)[0]
+            dists = np.sum((blocks_flat[i] - digits_flat[available]) ** 2, axis=1)
+            idx_in_available = np.argmin(dists)
+            idx = available[idx_in_available]
+            matching_digits_idx[i] = idx
+            used[idx] = True
+
+    print(f"\nfallbacks used: {fallback_count} times")
+
+    matching_digits = digits[matching_digits_idx]
+
     big_image = concat_2d(matching_digits, mnist_h, mnist_w)
     save_img_array(big_image, output_file)
 

@@ -4,3 +4,4 @@ pillow
 tqdm
 opencv-python
 matplotlib
+scikit-learn
