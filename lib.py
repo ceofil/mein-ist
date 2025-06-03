@@ -20,24 +20,36 @@ def save_img_array(arr, filename):
     print(f'saved {filename} with shape {arr.shape}')
     im.fromarray(arr).save(filename)
 
-def test(digits, input_file, output_file, scale, k=10):
-    image = cv2.imread(input_file)
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    h, w = gray.shape
+def plot_results(input_image, output_image):
+    plt.figure(figsize=(12, 6))
+    plt.subplot(1, 2, 1)
+    plt.title("Input Image (grayscale, resized)")
+    plt.imshow(input_image, cmap='gray')
+    plt.axis('off')
+
+    plt.subplot(1, 2, 2)
+    plt.title("Output Image")
+    plt.imshow(output_image, cmap='gray')
+    plt.axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+def test(digits, input_file, scale, k=10):
+    input_image_gray = cv2.cvtColor(cv2.imread(input_file), cv2.COLOR_BGR2GRAY)
+    h, w = input_image_gray.shape
     new_h = int(h * scale)
     new_w = int(w * scale)
-    gray_resized = cv2.resize(gray, dsize=(new_w, new_h), interpolation=cv2.INTER_CUBIC)
-    h, w = gray_resized.shape
+    input_image_gray_resized = cv2.resize(input_image_gray, dsize=(new_w, new_h), interpolation=cv2.INTER_CUBIC)
+    h, w = input_image_gray_resized.shape
     mnist_h = h // 28
     mnist_w = w // 28
-    h = mnist_h * 28
-    w = mnist_w * 28
-    gray_resized = gray_resized[:h, :w]
+    input_image_gray_resized = input_image_gray_resized[:mnist_h * 28, :mnist_w * 28]  # crop image so dimensions are a multiple of 28
 
     blocks = []
     for my in range(mnist_h):
         for mx in range(mnist_w):
-            block = gray_resized[my * 28 : (my+1) * 28, mx * 28: (mx + 1) * 28]
+            block = input_image_gray_resized[my * 28 : (my+1) * 28, mx * 28: (mx + 1) * 28]
             blocks.append(block)
     blocks = np.array(blocks)
     num_blocks = blocks.shape[0]
@@ -45,7 +57,7 @@ def test(digits, input_file, output_file, scale, k=10):
     blocks_flat = blocks.reshape(num_blocks, -1).astype(np.float32)
 
     nn = NearestNeighbors(n_neighbors=k, algorithm='auto').fit(digits_flat)
-    distances, indices = nn.kneighbors(blocks_flat)  # indices: (num_blocks, k)
+    distances, indices = nn.kneighbors(blocks_flat)
 
     block_indices = np.arange(num_blocks)
     np.random.shuffle(block_indices)
@@ -70,23 +82,4 @@ def test(digits, input_file, output_file, scale, k=10):
             matching_digits_idx[i] = idx
             used[idx] = True
 
-    print(f"\nfallbacks used: {fallback_count} times")
-
-    matching_digits = digits[matching_digits_idx]
-
-    big_image = concat_2d(matching_digits, mnist_h, mnist_w)
-    save_img_array(big_image, output_file)
-
-    plt.figure(figsize=(12, 6))
-    plt.subplot(1, 2, 1)
-    plt.title("Input Image (resized)")
-    plt.imshow(gray_resized, cmap='gray')
-    plt.axis('off')
-
-    plt.subplot(1, 2, 2)
-    plt.title("Output Image")
-    plt.imshow(big_image, cmap='gray')
-    plt.axis('off')
-
-    plt.tight_layout()
-    plt.show()
+    return input_image_gray_resized, concat_2d(digits[matching_digits_idx], mnist_h, mnist_w), fallback_count
