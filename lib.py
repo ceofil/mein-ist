@@ -5,6 +5,7 @@ import cv2
 from sklearn.neighbors import NearestNeighbors
 from tqdm import tqdm
 
+
 def concat_2d(blocks, h, w):
     lines = []
     for y in range(h):
@@ -16,70 +17,90 @@ def concat_2d(blocks, h, w):
         lines.append(line)
     return np.vstack(lines)
 
+
 def save_img_array(arr, filename):
-    print(f'saved {filename} with shape {arr.shape}')
+    print(f"saved {filename} with shape {arr.shape}")
     im.fromarray(arr).save(filename)
+
 
 def plot_results(input_image, output_image):
     plt.figure(figsize=(12, 6))
     plt.subplot(1, 2, 1)
     plt.title("Input Image (grayscale, resized)")
-    plt.imshow(input_image, cmap='gray')
-    plt.axis('off')
+    plt.imshow(input_image, cmap="gray")
+    plt.axis("off")
 
     plt.subplot(1, 2, 2)
     plt.title("Output Image")
-    plt.imshow(output_image, cmap='gray')
-    plt.axis('off')
+    plt.imshow(output_image, cmap="gray")
+    plt.axis("off")
 
     plt.tight_layout()
     plt.show()
+
 
 def test(digits, input_file, scale, k=10):
     input_image_gray = cv2.cvtColor(cv2.imread(input_file), cv2.COLOR_BGR2GRAY)
     h, w = input_image_gray.shape
     new_h = int(h * scale)
     new_w = int(w * scale)
-    input_image_gray_resized = cv2.resize(input_image_gray, dsize=(new_w, new_h), interpolation=cv2.INTER_CUBIC)
+    input_image_gray_resized = cv2.resize(
+        input_image_gray, dsize=(new_w, new_h), interpolation=cv2.INTER_CUBIC
+    )
     h, w = input_image_gray_resized.shape
     mnist_h = h // 28
     mnist_w = w // 28
-    input_image_gray_resized = input_image_gray_resized[:mnist_h * 28, :mnist_w * 28]  # crop image so dimensions are a multiple of 28
+    input_image_gray_resized = input_image_gray_resized[
+        : mnist_h * 28, : mnist_w * 28
+    ]  # crop image so dimensions are a multiple of 28
 
     blocks = []
     for my in range(mnist_h):
         for mx in range(mnist_w):
-            block = input_image_gray_resized[my * 28 : (my+1) * 28, mx * 28: (mx + 1) * 28]
+            block = input_image_gray_resized[
+                my * 28 : (my + 1) * 28, mx * 28 : (mx + 1) * 28
+            ]
             blocks.append(block)
     blocks = np.array(blocks)
     num_blocks = blocks.shape[0]
+    block_indices = np.arange(num_blocks)
+    np.random.shuffle(block_indices)
     digits_flat = digits.reshape(digits.shape[0], -1).astype(np.float32)
     blocks_flat = blocks.reshape(num_blocks, -1).astype(np.float32)
 
-    nn = NearestNeighbors(n_neighbors=k, algorithm='auto').fit(digits_flat)
-    distances, indices = nn.kneighbors(blocks_flat)
-
-    block_indices = np.arange(num_blocks)
-    np.random.shuffle(block_indices)
+    _, indices = (
+        NearestNeighbors(n_neighbors=k, algorithm="auto")
+        .fit(digits_flat)
+        .kneighbors(blocks_flat)
+    )
 
     used = np.zeros(digits.shape[0], dtype=bool)
     matching_digits_idx = np.zeros(num_blocks, dtype=int)
     fallback_count = 0
 
-    for i in tqdm(block_indices, desc="Assigning blocks (shuffled)"):
-        for j in range(k):
-            idx = indices[i, j]
+    for block_idx in tqdm(
+        block_indices, desc="Assigning blocks (shuffled)", mininterval=1
+    ):
+        for kth in range(k):
+            idx = indices[block_idx, kth]
             if not used[idx]:
-                matching_digits_idx[i] = idx
+                matching_digits_idx[block_idx] = idx
                 used[idx] = True
                 break
         else:
             fallback_count += 1
             available = np.where(~used)[0]
-            dists = np.sum((blocks_flat[i] - digits_flat[available]) ** 2, axis=1)
-            idx_in_available = np.argmin(dists)
-            idx = available[idx_in_available]
-            matching_digits_idx[i] = idx
-            used[idx] = True
+            unassigned_blocks = np.where(matching_digits_idx == 0)[0]
+            _, new_indices = (
+                NearestNeighbors(n_neighbors=k, algorithm="auto")
+                .fit(digits_flat[available])
+                .kneighbors(blocks_flat[unassigned_blocks])
+            )
+            new_indices = available[new_indices]
+            indices[unassigned_blocks] = new_indices
 
-    return input_image_gray_resized, concat_2d(digits[matching_digits_idx], mnist_h, mnist_w), fallback_count
+    return (
+        input_image_gray_resized,
+        concat_2d(digits[matching_digits_idx], mnist_h, mnist_w),
+        fallback_count,
+    )
