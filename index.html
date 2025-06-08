@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>MNIST Mosaic Stream</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+    }
+    #top-bar {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-width: 320px;
+    }
+    #controls {
+      background: rgba(30,30,30,0.9);
+      padding: 10px 20px;
+      border-radius: 8px 8px 0 0;
+      color: #fff;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      width: 100%;
+      min-width: 320px;
+      box-sizing: border-box;
+      justify-content: center;
+    }
+    #progress-container {
+      width: 100%;
+      height: 20px;
+      background: #222;
+      border-radius: 0 0 8px 8px;
+      overflow: hidden;
+      display: none;
+      position: relative;
+    }
+    #progress-bar {
+      height: 100%;
+      width: 0;
+      background: #4caf50;
+      transition: width 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-weight: bold;
+      font-family: monospace;
+      font-size: 14px;
+      letter-spacing: 1px;
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+    }
+    #container {
+      display: flex;
+      width: 100vw;
+      height: 100vh;
+    }
+    #left, #right {
+      width: 50vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #111;
+      box-sizing: border-box;
+    }
+    #original, #canvas {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+      background: #000;
+      max-width: 100%;
+      max-height: 100%;
+    }
+    #canvas {
+      image-rendering: pixelated;
+      border: 1px solid #222;
+    }
+  </style>
+</head>
+<body>
+  <div id="top-bar">
+    <div id="controls">
+      <input type="file" id="fileInput" />
+      <button onclick="sendImage()">Send Image</button>
+    </div>
+    <div id="progress-container">
+      <div id="progress-bar"><span id="progress-text"></span></div>
+    </div>
+  </div>
+  <div id="container">
+    <div id="left">
+      <img id="original" src="" alt="Original" />
+    </div>
+    <div id="right">
+      <canvas id="canvas"></canvas>
+    </div>
+  </div>
+  <script>
+    let blocksPerRow = null;
+    let blocksPerCol = null;
+    let blockSize = 28;
+    let canvas = document.getElementById('canvas');
+    let ctx = canvas.getContext('2d');
+    let totalBlocks = 0;
+    let receivedBlocks = 0;
+
+    function updateProgressBar() {
+      const container = document.getElementById('progress-container');
+      const bar = document.getElementById('progress-bar');
+      const text = document.getElementById('progress-text');
+      if (totalBlocks > 0) {
+        container.style.display = 'block';
+        const percent = Math.round((receivedBlocks / totalBlocks) * 100);
+        bar.style.width = percent + '%';
+        text.textContent = percent + '%';
+      } else {
+        container.style.display = 'none';
+        bar.style.width = '0';
+        text.textContent = '';
+      }
+    }
+
+    document.getElementById('fileInput').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        const img = document.getElementById('original');
+        img.src = evt.target.result;
+        img.onload = function() {
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          ctx.fillStyle = "#000";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        };
+      };
+      reader.readAsDataURL(file);
+    });
+
+    function sendImage() {
+      const fileInput = document.getElementById('fileInput');
+      if (!fileInput.files.length) return;
+      const file = fileInput.files[0];
+      const formData = new FormData();
+      formData.append('file', file);
+
+      totalBlocks = 0;
+      receivedBlocks = 0;
+      updateProgressBar();
+
+      fetch('/api/process', {
+        method: 'POST',
+        body: formData,
+        headers: { Accept: 'text/event-stream' }
+      }).then(response => {
+        const reader = response.body.getReader();
+        let buffer = '';
+        blocksPerRow = null;
+        blocksPerCol = null;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        function read() {
+          reader.read().then(({ done, value }) => {
+            if (done) {
+              totalBlocks = 0;
+              receivedBlocks = 0;
+              updateProgressBar();
+              return;
+            }
+            buffer += new TextDecoder().decode(value);
+            let parts = buffer.split('\n\n');
+            buffer = parts.pop();
+            for (const part of parts) {
+              if (part.startsWith('event:meta')) {
+                const match = part.match(/data:(\d+),(\d+)/);
+                if (match) {
+                  blocksPerRow = parseInt(match[1]);
+                  blocksPerCol = parseInt(match[2]);
+                  totalBlocks = blocksPerRow * blocksPerCol;
+                  receivedBlocks = 0;
+                  updateProgressBar();
+                  canvas.width = blocksPerRow * blockSize;
+                  canvas.height = blocksPerCol * blockSize;
+                  ctx.fillStyle = "#000";
+                  ctx.fillRect(0, 0, canvas.width, canvas.height);
+                }
+              } else if (part.startsWith('event:block')) {
+                receivedBlocks++;
+                updateProgressBar();
+                const match = part.match(/data:(\d+),(\d+),(.+)/);
+                if (match) {
+                  const block_x = parseInt(match[1]);
+                  const block_y = parseInt(match[2]);
+                  const hex = match[3];
+                  const bytes = new Uint8Array(hex.match(/.{1,2}/g).map(b => parseInt(b, 16)));
+                  const blob = new Blob([bytes], { type: 'image/png' });
+                  const url = URL.createObjectURL(blob);
+                  const img = new window.Image();
+                  img.onload = function() {
+                    ctx.drawImage(
+                      img,
+                      block_x * blockSize,
+                      block_y * blockSize,
+                      blockSize,
+                      blockSize
+                    );
+                    URL.revokeObjectURL(url);
+                  };
+                  img.src = url;
+                }
+              } else if (part.startsWith('event:final')) {
+                totalBlocks = 0;
+                receivedBlocks = 0;
+                updateProgressBar();
+                const match = part.match(/data:(.+)/);
+                if (match) {
+                  const b64 = match[1];
+                  const link = document.createElement('a');
+                  link.href = 'data:image/png;base64,' + b64;
+                  link.download = 'final.png';
+                  document.body.appendChild(link);
+                  link.click();
+                  document.body.removeChild(link);
+                }
+              }
+            }
+            read();
+          });
+        }
+        read();
+      });
+    }
+  </script>
+</body>
+</html>

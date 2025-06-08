@@ -1,63 +1,25 @@
 import numpy as np
 from PIL import Image as im
-from matplotlib import pyplot as plt
 import cv2
 from sklearn.neighbors import NearestNeighbors
-from tqdm import tqdm
+import io
+import base64
 
-
-def concat_2d(blocks, h, w):
-    lines = []
-    for y in range(h):
-        images_in_line = []
-        for x in range(w):
-            img = blocks[w * y + x]
-            images_in_line.append(img)
-        line = np.hstack(images_in_line)
-        lines.append(line)
-    return np.vstack(lines)
-
-
-def save_img_array(arr, filename):
-    print(f"saved {filename} with shape {arr.shape}")
-    im.fromarray(arr).save(filename)
-
-
-def plot_results(input_image, output_image):
-    plt.figure(figsize=(12, 6))
-    plt.subplot(1, 2, 1)
-    plt.title("Input Image (grayscale, resized)")
-    plt.imshow(input_image, cmap="gray")
-    plt.axis("off")
-
-    plt.subplot(1, 2, 2)
-    plt.title("Output Image")
-    plt.imshow(output_image, cmap="gray")
-    plt.axis("off")
-
-    plt.tight_layout()
-    plt.show()
-
-
-def test(digits, input_file, scale, k=10):
-    input_image_gray = cv2.cvtColor(cv2.imread(input_file), cv2.COLOR_BGR2GRAY)
-    h, w = input_image_gray.shape
+def stream_mnist_assignment(digits, image_bytes, scale=1.0, k=10):
+    arr = np.array(im.open(image_bytes).convert("L"))
+    h, w = arr.shape
     new_h = int(h * scale)
     new_w = int(w * scale)
-    input_image_gray_resized = cv2.resize(
-        input_image_gray, dsize=(new_w, new_h), interpolation=cv2.INTER_CUBIC
-    )
-    h, w = input_image_gray_resized.shape
+    arr_resized = cv2.resize(arr, dsize=(new_w, new_h), interpolation=cv2.INTER_CUBIC)
+    h, w = arr_resized.shape
     mnist_h = h // 28
     mnist_w = w // 28
-    input_image_gray_resized = input_image_gray_resized[
-        : mnist_h * 28, : mnist_w * 28
-    ]  # crop image so dimensions are a multiple of 28
+    arr_resized = arr_resized[: mnist_h * 28, : mnist_w * 28]
 
     blocks = []
     for my in range(mnist_h):
         for mx in range(mnist_w):
-            block = input_image_gray_resized[
+            block = arr_resized[
                 my * 28 : (my + 1) * 28, mx * 28 : (mx + 1) * 28
             ]
             blocks.append(block)
@@ -76,11 +38,12 @@ def test(digits, input_file, scale, k=10):
 
     used = np.zeros(digits.shape[0], dtype=bool)
     matching_digits_idx = np.zeros(num_blocks, dtype=int)
-    fallback_count = 0
 
-    for block_idx in tqdm(
-        block_indices, desc="Assigning blocks (shuffled)", mininterval=1
-    ):
+    yield mnist_w, mnist_h
+
+    mosaic = np.zeros((mnist_h * 28, mnist_w * 28), dtype=np.uint8)
+
+    for block_idx in block_indices:
         for kth in range(k):
             idx = indices[block_idx, kth]
             if not used[idx]:
@@ -88,7 +51,6 @@ def test(digits, input_file, scale, k=10):
                 used[idx] = True
                 break
         else:
-            fallback_count += 1
             available = np.where(~used)[0]
             unassigned_blocks = np.where(matching_digits_idx == 0)[0]
             _, new_indices = (
@@ -98,9 +60,29 @@ def test(digits, input_file, scale, k=10):
             )
             new_indices = available[new_indices]
             indices[unassigned_blocks] = new_indices
+        
+            if available.size > 0:
+                matching_digits_idx[block_idx] = available[0]
+                used[available[0]] = True
+            else:
+                matching_digits_idx[block_idx] = 0
 
-    return (
-        input_image_gray_resized,
-        concat_2d(digits[matching_digits_idx], mnist_h, mnist_w),
-        fallback_count,
-    )
+        block_y = block_idx // mnist_w
+        block_x = block_idx % mnist_w
+        mnist_block = digits[matching_digits_idx[block_idx]]
+
+        mosaic[
+            block_y * 28 : (block_y + 1) * 28,
+            block_x * 28 : (block_x + 1) * 28
+        ] = mnist_block
+
+        buf = io.BytesIO()
+        im.fromarray(mnist_block).save(buf, format="PNG")
+        block_hex = buf.getvalue().hex()
+        yield block_x, block_y, block_hex
+
+    buf = io.BytesIO()
+    im.fromarray(mosaic).save(buf, format="PNG")
+    final_img_bytes = buf.getvalue()
+    final_img_b64 = base64.b64encode(final_img_bytes).decode('ascii')
+    yield "final", final_img_b64
