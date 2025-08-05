@@ -14,8 +14,9 @@ def stream_mnist_assignment(digits, image_bytes, scale=1.0, k=10):
     h, w = arr_resized.shape
     mnist_h = h // 28
     mnist_w = w // 28
-    arr_resized = arr_resized[: mnist_h * 28, : mnist_w * 28]
+    yield mnist_w, mnist_h
 
+    arr_resized = arr_resized[: mnist_h * 28, : mnist_w * 28]
     blocks = []
     for my in range(mnist_h):
         for mx in range(mnist_w):
@@ -39,7 +40,7 @@ def stream_mnist_assignment(digits, image_bytes, scale=1.0, k=10):
     used = np.zeros(digits.shape[0], dtype=bool)
     matching_digits_idx = np.zeros(num_blocks, dtype=int)
 
-    yield mnist_w, mnist_h
+
 
     mosaic = np.zeros((mnist_h * 28, mnist_w * 28), dtype=np.uint8)
 
@@ -52,15 +53,6 @@ def stream_mnist_assignment(digits, image_bytes, scale=1.0, k=10):
                 break
         else:
             available = np.where(~used)[0]
-            unassigned_blocks = np.where(matching_digits_idx == 0)[0]
-            _, new_indices = (
-                NearestNeighbors(n_neighbors=k, algorithm="auto")
-                .fit(digits_flat[available])
-                .kneighbors(blocks_flat[unassigned_blocks])
-            )
-            new_indices = available[new_indices]
-            indices[unassigned_blocks] = new_indices
-        
             if available.size > 0:
                 matching_digits_idx[block_idx] = available[0]
                 used[available[0]] = True

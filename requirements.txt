@@ -6,4 +6,4 @@ opencv-python
 matplotlib
 scikit-learn
 fastapi 
-uvicorn
+uvicorn[standard]

@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>MNIST Mosaic Stream</title>
+  <title>MNIST Mosaic Stream (WebSocket)</title>
   <style>
     body {
       margin: 0;
@@ -93,7 +93,7 @@
   <div id="top-bar">
     <div id="controls">
       <input type="file" id="fileInput" />
-      <button onclick="sendImage()">Send Image</button>
+      <button id="sendBtn" onclick="sendImage()">Send Image</button>
     </div>
     <div id="progress-container">
       <div id="progress-bar"><span id="progress-text"></span></div>
@@ -115,6 +115,12 @@
     let ctx = canvas.getContext('2d');
     let totalBlocks = 0;
     let receivedBlocks = 0;
+    let ws = null;
+
+    function setControlsDisabled(disabled) {
+      document.getElementById('fileInput').disabled = disabled;
+      document.getElementById('sendBtn').disabled = disabled;
+    }
 
     function updateProgressBar() {
       const container = document.getElementById('progress-container');
@@ -153,94 +159,86 @@
       const fileInput = document.getElementById('fileInput');
       if (!fileInput.files.length) return;
       const file = fileInput.files[0];
-      const formData = new FormData();
-      formData.append('file', file);
 
       totalBlocks = 0;
       receivedBlocks = 0;
       updateProgressBar();
+      setControlsDisabled(true);
 
-      fetch('/api/process', {
-        method: 'POST',
-        body: formData,
-        headers: { Accept: 'text/event-stream' }
-      }).then(response => {
-        const reader = response.body.getReader();
-        let buffer = '';
-        blocksPerRow = null;
-        blocksPerCol = null;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ws = new WebSocket(`ws://${window.location.host}/ws/process`);
+      ws.binaryType = "arraybuffer";
 
-        function read() {
-          reader.read().then(({ done, value }) => {
-            if (done) {
-              totalBlocks = 0;
-              receivedBlocks = 0;
-              updateProgressBar();
-              return;
-            }
-            buffer += new TextDecoder().decode(value);
-            let parts = buffer.split('\n\n');
-            buffer = parts.pop();
-            for (const part of parts) {
-              if (part.startsWith('event:meta')) {
-                const match = part.match(/data:(\d+),(\d+)/);
-                if (match) {
-                  blocksPerRow = parseInt(match[1]);
-                  blocksPerCol = parseInt(match[2]);
-                  totalBlocks = blocksPerRow * blocksPerCol;
-                  receivedBlocks = 0;
-                  updateProgressBar();
-                  canvas.width = blocksPerRow * blockSize;
-                  canvas.height = blocksPerCol * blockSize;
-                  ctx.fillStyle = "#000";
-                  ctx.fillRect(0, 0, canvas.width, canvas.height);
-                }
-              } else if (part.startsWith('event:block')) {
-                receivedBlocks++;
-                updateProgressBar();
-                const match = part.match(/data:(\d+),(\d+),(.+)/);
-                if (match) {
-                  const block_x = parseInt(match[1]);
-                  const block_y = parseInt(match[2]);
-                  const hex = match[3];
-                  const bytes = new Uint8Array(hex.match(/.{1,2}/g).map(b => parseInt(b, 16)));
-                  const blob = new Blob([bytes], { type: 'image/png' });
-                  const url = URL.createObjectURL(blob);
-                  const img = new window.Image();
-                  img.onload = function() {
-                    ctx.drawImage(
-                      img,
-                      block_x * blockSize,
-                      block_y * blockSize,
-                      blockSize,
-                      blockSize
-                    );
-                    URL.revokeObjectURL(url);
-                  };
-                  img.src = url;
-                }
-              } else if (part.startsWith('event:final')) {
-                totalBlocks = 0;
-                receivedBlocks = 0;
-                updateProgressBar();
-                const match = part.match(/data:(.+)/);
-                if (match) {
-                  const b64 = match[1];
-                  const link = document.createElement('a');
-                  link.href = 'data:image/png;base64,' + b64;
-                  link.download = 'final.png';
-                  document.body.appendChild(link);
-                  link.click();
-                  document.body.removeChild(link);
-                }
-              }
-            }
-            read();
-          });
+      ws.onopen = function() {
+        // Send the image as bytes
+        const reader = new FileReader();
+        reader.onload = function(evt) {
+          ws.send(evt.target.result);
+        };
+        reader.readAsArrayBuffer(file);
+      };
+
+      ws.onmessage = function(event) {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "meta") {
+          blocksPerRow = msg.w;
+          blocksPerCol = msg.h;
+          totalBlocks = blocksPerRow * blocksPerCol;
+          receivedBlocks = 0;
+          updateProgressBar();
+          canvas.width = blocksPerRow * blockSize;
+          canvas.height = blocksPerCol * blockSize;
+          ctx.fillStyle = "#000";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        } else if (msg.type === "block") {
+          receivedBlocks++;
+          updateProgressBar();
+          const block_x = msg.x;
+          const block_y = msg.y;
+          const hex = msg.hex;
+          const bytes = new Uint8Array(hex.match(/.{1,2}/g).map(b => parseInt(b, 16)));
+          const blob = new Blob([bytes], { type: 'image/png' });
+          const url = URL.createObjectURL(blob);
+          const img = new window.Image();
+          img.onload = function() {
+            ctx.drawImage(
+              img,
+              block_x * blockSize,
+              block_y * blockSize,
+              blockSize,
+              blockSize
+            );
+            URL.revokeObjectURL(url);
+          };
+          img.src = url;
+        } else if (msg.type === "final") {
+          totalBlocks = 0;
+          receivedBlocks = 0;
+          updateProgressBar();
+          setControlsDisabled(false);
+          const b64 = msg.b64;
+          const link = document.createElement('a');
+          link.href = 'data:image/png;base64,' + b64;
+          link.download = 'final.png';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          ws.close();
         }
-        read();
-      });
+      };
+
+      ws.onerror = function() {
+        setControlsDisabled(false);
+        totalBlocks = 0;
+        receivedBlocks = 0;
+        updateProgressBar();
+      };
+
+      ws.onclose = function() {
+        setControlsDisabled(false);
+        totalBlocks = 0;
+        receivedBlocks = 0;
+        updateProgressBar();
+      };
     }
   </script>
 </body>
