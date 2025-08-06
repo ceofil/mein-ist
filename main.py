@@ -1,12 +1,14 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile
-from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from tensorflow.keras.datasets import mnist
-from PIL import Image
-import numpy as np
 import io
-from PIL import Image as im
 import base64
+import numpy as np
+from PIL import Image
+from fastapi import FastAPI
+from fastapi import WebSocket
+from fastapi import WebSocketDisconnect
+from fastapi.responses import HTMLResponse
+
+from tensorflow.keras.datasets import mnist
+
 from lib import resize_image
 from lib import stream_mnist_assignment
 
@@ -24,7 +26,6 @@ def index():
 async def ws_process(websocket: WebSocket):
     await websocket.accept()
     try:
-        # Receive the image as bytes
         data = await websocket.receive_bytes()
         mnist_w, mnist_h, arr_resized = resize_image(io.BytesIO(data), scale=1.0)
         await websocket.send_json({"type": "meta", "w": mnist_w, "h": mnist_h})
@@ -38,15 +39,18 @@ async def ws_process(websocket: WebSocket):
             ] = mnist_block
             
             block_buf = io.BytesIO()
-            im.fromarray(mnist_block).save(block_buf, format="PNG")
+            Image.fromarray(mnist_block).save(block_buf, format="PNG")
+            # progress indicator, blocks are shown as they are processed
             await websocket.send_json({
                 "type": "block",
                 "b64": base64.b64encode(block_buf.getvalue()).decode('ascii'),
                 "x": int(block_x),
                 "y": int(block_y)
             })
+        
+        # download the actual image
         final_buf = io.BytesIO()
-        im.fromarray(mosaic).save(final_buf, format="PNG")
+        Image.fromarray(mosaic).save(final_buf, format="PNG")
         final_img_bytes = final_buf.getvalue()
         await websocket.send_json({
             "type": "final", 

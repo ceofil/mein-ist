@@ -1,12 +1,10 @@
-import numpy as np
-from PIL import Image as im
 import cv2
+import numpy as np
+from PIL import Image
 from sklearn.neighbors import NearestNeighbors
-import io
-import base64
 
 def resize_image(image_bytes, scale=1.0):
-    arr = np.array(im.open(image_bytes).convert("L"))
+    arr = np.array(Image.open(image_bytes).convert("L"))
     h, w = arr.shape
     new_h = int(h * scale)
     new_w = int(w * scale)

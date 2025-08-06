@@ -1,9 +1,7 @@
-ipykernel
 tensorflow
 pillow
-tqdm
 opencv-python
 matplotlib
 scikit-learn
-fastapi 
+fastapi
 uvicorn[standard]
