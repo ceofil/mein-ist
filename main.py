@@ -5,7 +5,9 @@ from tensorflow.keras.datasets import mnist
 from PIL import Image
 import numpy as np
 import io
+from PIL import Image as im
 import base64
+from lib import resize_image
 from lib import stream_mnist_assignment
 
 (train_X, _), (test_X, _) = mnist.load_data()
@@ -24,21 +26,31 @@ async def ws_process(websocket: WebSocket):
     try:
         # Receive the image as bytes
         data = await websocket.receive_bytes()
-        gen = stream_mnist_assignment(digits, io.BytesIO(data), scale=1.0, k=10)
-        meta = next(gen)
-        mnist_w, mnist_h = meta
+        mnist_w, mnist_h, arr_resized = resize_image(io.BytesIO(data), scale=1.0)
         await websocket.send_json({"type": "meta", "w": mnist_w, "h": mnist_h})
 
-        for item in gen:
-            if item[0] == "final":
-                await websocket.send_json({"type": "final", "b64": item[1]})
-            else:
-                block_x, block_y, block_hex = item
-                await websocket.send_json({
-                    "type": "block",
-                    "x": int(block_x),
-                    "y": int(block_y),
-                    "hex": block_hex
-                })
+
+        mosaic = np.zeros((mnist_h * 28, mnist_w * 28), dtype=np.uint8)
+        for block_x, block_y, mnist_block in stream_mnist_assignment(digits, mnist_w, mnist_h, arr_resized, k=1000):
+            mosaic[
+                block_y * 28 : (block_y + 1) * 28,
+                block_x * 28 : (block_x + 1) * 28
+            ] = mnist_block
+            
+            block_buf = io.BytesIO()
+            im.fromarray(mnist_block).save(block_buf, format="PNG")
+            await websocket.send_json({
+                "type": "block",
+                "b64": base64.b64encode(block_buf.getvalue()).decode('ascii'),
+                "x": int(block_x),
+                "y": int(block_y)
+            })
+        final_buf = io.BytesIO()
+        im.fromarray(mosaic).save(final_buf, format="PNG")
+        final_img_bytes = final_buf.getvalue()
+        await websocket.send_json({
+            "type": "final", 
+            "b64": base64.b64encode(final_img_bytes).decode('ascii')
+        })
     except WebSocketDisconnect:
         pass
