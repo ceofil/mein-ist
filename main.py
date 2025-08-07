@@ -40,7 +40,8 @@ async def ws_process(websocket: WebSocket):
             
             block_buf = io.BytesIO()
             Image.fromarray(mnist_block).save(block_buf, format="PNG")
-            # progress indicator, blocks are shown as they are processed
+
+            # blocks are shown as they are processed
             await websocket.send_json({
                 "type": "block",
                 "b64": base64.b64encode(block_buf.getvalue()).decode('ascii'),

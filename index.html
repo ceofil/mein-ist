@@ -177,7 +177,7 @@
       updateProgressBar();
       setControlsDisabled(true);
 
-      ws = new WebSocket(`ws://${window.location.host}/ws/process`);
+      ws = new WebSocket(`wss://${window.location.host}/ws/process`);
       ws.binaryType = "arraybuffer";
 
       ws.onopen = function () {
